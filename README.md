@@ -4,9 +4,26 @@ Search, browse, and install premium skills and agents from the [AgentPowers mark
 
 ## Install
 
+Add the MCP server to your Claude Code config:
+
 ```bash
-claude plugin add AgentPowers-AI/agentpowers-plugin
+claude mcp add agentpowers -- npx -y @agentpowers/mcp-server
 ```
+
+Or add manually to `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "agentpowers": {
+      "command": "npx",
+      "args": ["@agentpowers/mcp-server"]
+    }
+  }
+}
+```
+
+> **Note:** Plugin marketplace support (`claude plugin install`) is coming soon.
 
 ## What You Get
 
