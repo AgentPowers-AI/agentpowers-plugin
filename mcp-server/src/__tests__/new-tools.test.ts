@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, writeFileSync, rmSync, mkdtempSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { hashDirectory } from "../content-hasher.js";
-import { savePin, loadPins } from "../pin-manager.js";
 
 // Mock api-client before imports
 vi.mock("../api-client.js", () => ({
   apiGet: vi.fn(),
+  apiPost: vi.fn(),
+  apiRoot: vi.fn(),
+  fetchUrl: vi.fn(),
+  API_BASE: "https://api.agentpowers.ai/v1",
+  API_ROOT: "https://api.agentpowers.ai",
+  recordInstallation: vi.fn().mockResolvedValue(undefined),
   APIError: class extends Error {
     statusCode: number;
     constructor(msg: string, statusCode: number) {
@@ -16,6 +21,7 @@ vi.mock("../api-client.js", () => ({
       this.statusCode = statusCode;
     }
   },
+  formatAPIError: vi.fn((err: { message: string }) => err.message),
 }));
 vi.mock("../auth.js", () => ({ loadAuthToken: vi.fn() }));
 vi.mock("../installer.js", async (importOriginal) => {
@@ -26,14 +32,26 @@ vi.mock("../installer.js", async (importOriginal) => {
     validateSlug: actual.validateSlug,
   };
 });
+vi.mock("../cli-runner.js", () => ({
+  ensureApAvailable: vi.fn().mockResolvedValue(undefined),
+  runAp: vi.fn().mockResolvedValue({ code: 0, signal: null, stdout: "OK", stderr: "", timedOut: false, error: null }),
+  formatCommandResult: vi.fn().mockReturnValue("OK"),
+  openInBrowser: vi.fn().mockResolvedValue({ ok: true, command: "open", output: "" }),
+  stripAnsi: vi.fn((s: string) => s),
+}));
+vi.mock("../plugin-state.js", () => ({
+  rememberCheckout: vi.fn(),
+  getCheckoutRecord: vi.fn(),
+  loadPluginState: vi.fn().mockReturnValue({ checkouts: {} }),
+  savePluginState: vi.fn(),
+}));
 
-import { apiGet, APIError } from "../api-client.js";
-import { getInstallDir } from "../installer.js";
+import { apiGet } from "../api-client.js";
 import {
-  getInstalledSkills,
-  handleCheckInstalled,
-  handleUninstallSkill,
   handleCheckForUpdates,
+  handleCheckPluginVersion,
+  handleGetMarketplaceSnapshot,
+  handleGetOpenApiSummary,
 } from "../handlers.js";
 
 function makeDetail(overrides: Record<string, unknown> = {}) {
@@ -48,33 +66,16 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     source_url: null, source_downloads: null, source_stars: null,
     source_comments: null, source_versions_count: null, source_installs: null,
     ap_security_status: null, ap_security_score: null, ap_scan_hash: null,
-    ap_scanned_at: null, ...overrides,
+    ap_scanned_at: null, rating_average: null, rating_count: 0,
+    ...overrides,
   };
 }
 
-// These tests use the REAL homedir — the actual ~/.claude and ~/.agentpowers dirs.
-// To avoid polluting the user's real dirs, we create isolated temp dirs and use
-// real pin-manager functions but mock getInstallDir to point to our temp dirs.
-
 let tempDir: string;
-let skillsDir: string;
-let agentsDir: string;
-let pinsPath: string;
 
 beforeEach(() => {
   vi.clearAllMocks();
   tempDir = mkdtempSync(join(tmpdir(), "ap-test-"));
-  skillsDir = join(tempDir, "skills");
-  agentsDir = join(tempDir, "agents");
-  pinsPath = join(tempDir, "pins.json");
-  mkdirSync(skillsDir, { recursive: true });
-  mkdirSync(agentsDir, { recursive: true });
-
-  // Mock getInstallDir to use temp dir
-  vi.mocked(getInstallDir).mockImplementation((slug: string, type: string) => {
-    const base = type === "agent" ? agentsDir : skillsDir;
-    return join(base, slug);
-  });
 });
 
 afterEach(() => {
@@ -82,101 +83,16 @@ afterEach(() => {
 });
 
 /** Install a fake skill in the temp dir. */
-function installFake(slug: string, type: "skill" | "agent" = "skill", content = "hello") {
-  const base = type === "skill" ? skillsDir : agentsDir;
-  const dir = join(base, slug);
+function installFake(baseDir: string, slug: string, content = "hello") {
+  const dir = join(baseDir, slug);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), content);
   return dir;
 }
 
-/** Write a pin to our temp pins file. */
-function writePin(slug: string, contentHash: string, overrides: Record<string, unknown> = {}) {
-  let pins: Record<string, unknown> = {};
-  try {
-    pins = JSON.parse(require("node:fs").readFileSync(pinsPath, "utf-8"));
-  } catch { /* empty */ }
-  pins[slug] = {
-    source: "agentpowers",
-    version: "1.0.0",
-    content_hash: contentHash,
-    installed_at: new Date().toISOString(),
-    scanned_at: new Date().toISOString(),
-    security_status: "pass",
-    ...overrides,
-  };
-  writeFileSync(pinsPath, JSON.stringify(pins, null, 2));
-}
-
-// Since getInstalledSkills uses the real homedir() for scanning ~/.claude/{skills,agents},
-// and we can't easily mock that without module-level issues, we'll test the handler
-// outputs by going through the full stack with temp filesystem.
-// For getInstalledSkills specifically, it scans homedir()/.claude — we can't intercept
-// that without hoisting issues. So we test the handlers at a higher level.
-
-describe("handleUninstallSkill", () => {
-  it("removes installed skill directory", async () => {
-    const dir = installFake("remove-me");
-    expect(existsSync(dir)).toBe(true);
-
-    const result = await handleUninstallSkill({ slug: "remove-me" });
-    expect(result).toContain("Uninstalled");
-    expect(result).toContain("remove-me");
-    expect(existsSync(dir)).toBe(false);
-  });
-
-  it("removes agent from agents directory", async () => {
-    const dir = installFake("remove-agent", "agent");
-    expect(existsSync(dir)).toBe(true);
-
-    const result = await handleUninstallSkill({ slug: "remove-agent" });
-    expect(result).toContain("Uninstalled");
-    expect(existsSync(dir)).toBe(false);
-  });
-
-  it("returns 'not installed' for unknown slug", async () => {
-    const result = await handleUninstallSkill({ slug: "nonexistent" });
-    expect(result).toContain("not installed");
-  });
-
-  it("handles skill that exists only as agent", async () => {
-    // Only install as agent, not skill
-    installFake("agent-only", "agent");
-
-    const result = await handleUninstallSkill({ slug: "agent-only" });
-    expect(result).toContain("Uninstalled");
-  });
-});
-
-describe("handleCheckForUpdates (with no installed skills)", () => {
-  it("returns 'no skills installed' when nothing is installed", async () => {
-    // getInstalledSkills scans the real ~/.claude dir. We can't easily control that.
-    // But we can verify the message format when the handler finds nothing on the
-    // system for our temp paths. Since getInstalledSkills uses real homedir,
-    // this test verifies the empty-path behavior indirectly.
-    // The real test value is in the mock-based check_for_updates tests below.
-  });
-});
-
-// Test the apiGet interaction patterns used by handleCheckForUpdates
-describe("check_for_updates API interaction", () => {
-  it("calls /v1/detail/{slug} for each installed skill", async () => {
-    // Since we can't easily control getInstalledSkills without mocking homedir,
-    // we test the API call pattern by verifying apiGet was called correctly
-    // after handleCheckForUpdates processes items it finds.
-    // This test is a structural verification.
-    const mockResult = makeDetail({ version: "2.0.0" });
-    vi.mocked(apiGet).mockResolvedValue(mockResult);
-
-    // We can at least verify the handler runs without error
-    await handleCheckForUpdates();
-    // The number of apiGet calls depends on what's actually installed
-  });
-});
-
 describe("content hashing integration", () => {
   it("produces deterministic hash for installed skill", () => {
-    const dir = installFake("hash-test", "skill", "test content");
+    const dir = installFake(tempDir, "hash-test", "test content");
     const hash1 = hashDirectory(dir);
     const hash2 = hashDirectory(dir);
     expect(hash1).toBe(hash2);
@@ -184,10 +100,79 @@ describe("content hashing integration", () => {
   });
 
   it("detects modifications to installed skill", () => {
-    const dir = installFake("modify-test", "skill", "original");
+    const dir = installFake(tempDir, "modify-test", "original");
     const hashBefore = hashDirectory(dir);
     writeFileSync(join(dir, "SKILL.md"), "modified");
     const hashAfter = hashDirectory(dir);
     expect(hashBefore).not.toBe(hashAfter);
+  });
+});
+
+describe("handleCheckForUpdates", () => {
+  it("runs without error when no skills are installed", async () => {
+    const result = await handleCheckForUpdates();
+    // May find skills in the real homedir or not, just verify it completes
+    expect(typeof result).toBe("string");
+  });
+});
+
+describe("handleCheckPluginVersion", () => {
+  it("returns version info when registry is unreachable", async () => {
+    const { fetchUrl } = await import("../api-client.js");
+    vi.mocked(fetchUrl).mockRejectedValue(new Error("Network error"));
+
+    const result = await handleCheckPluginVersion("0.1.8");
+    expect(result).toContain("0.1.8");
+    expect(result).toContain("unable to check for updates");
+  });
+
+  it("reports when up to date", async () => {
+    const { fetchUrl } = await import("../api-client.js");
+    vi.mocked(fetchUrl).mockResolvedValue({ "dist-tags": { latest: "0.1.8" } });
+
+    const result = await handleCheckPluginVersion("0.1.8");
+    expect(result).toContain("latest version");
+  });
+
+  it("reports when update available", async () => {
+    const { fetchUrl } = await import("../api-client.js");
+    vi.mocked(fetchUrl).mockResolvedValue({ "dist-tags": { latest: "1.0.0" } });
+
+    const result = await handleCheckPluginVersion("0.1.8");
+    expect(result).toContain("Update available");
+    expect(result).toContain("1.0.0");
+  });
+});
+
+describe("handleGetMarketplaceSnapshot", () => {
+  it("returns snapshot info", async () => {
+    const { apiRoot } = await import("../api-client.js");
+    vi.mocked(apiRoot).mockResolvedValue({ status: "ok", version: "1.0" });
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.includes("/skills")) return { items: [], total: 42 };
+      if (path.includes("/categories")) return { categories: [{ category: "dev" }] };
+      if (path.includes("/sellers")) return { total: 5 };
+      return {};
+    });
+
+    const result = await handleGetMarketplaceSnapshot();
+    expect(result).toContain("AgentPowers marketplace snapshot");
+    expect(result).toContain("Skills total: 42");
+  });
+});
+
+describe("handleGetOpenApiSummary", () => {
+  it("returns OpenAPI summary", async () => {
+    const { fetchUrl } = await import("../api-client.js");
+    vi.mocked(fetchUrl).mockResolvedValue({
+      openapi: "3.0.0",
+      info: { title: "AgentPowers API", version: "1.0" },
+      servers: [{ url: "https://api.agentpowers.ai" }],
+      paths: { "/v1/search": {}, "/v1/skills": {} },
+    });
+
+    const result = await handleGetOpenApiSummary();
+    expect(result).toContain("AgentPowers OpenAPI summary");
+    expect(result).toContain("Path count: 2");
   });
 });

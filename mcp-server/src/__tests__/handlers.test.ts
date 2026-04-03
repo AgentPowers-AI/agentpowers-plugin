@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../api-client.js", () => ({
   apiGet: vi.fn(),
+  apiPost: vi.fn(),
+  apiRoot: vi.fn(),
+  fetchUrl: vi.fn(),
+  API_BASE: "https://api.agentpowers.ai/v1",
+  API_ROOT: "https://api.agentpowers.ai",
   recordInstallation: vi.fn().mockResolvedValue(undefined),
   APIError: class extends Error {
     statusCode: number;
@@ -13,6 +18,13 @@ vi.mock("../api-client.js", () => ({
       this.code = code;
     }
   },
+  NetworkError: class extends Error {
+    constructor(msg: string) {
+      super(msg);
+      this.name = "NetworkError";
+    }
+  },
+  formatAPIError: vi.fn((err: { statusCode: number; message: string }) => err.message),
 }));
 vi.mock("../auth.js", () => ({ loadAuthToken: vi.fn() }));
 vi.mock("../installer.js", async (importOriginal) => {
@@ -23,15 +35,38 @@ vi.mock("../installer.js", async (importOriginal) => {
     validateSlug: actual.validateSlug,
   };
 });
+vi.mock("../cli-runner.js", () => ({
+  ensureApAvailable: vi.fn().mockResolvedValue(undefined),
+  runAp: vi.fn().mockResolvedValue({ code: 0, signal: null, stdout: "Installed successfully", stderr: "", timedOut: false, error: null }),
+  formatCommandResult: vi.fn().mockReturnValue("Installed successfully"),
+  openInBrowser: vi.fn().mockResolvedValue({ ok: true, command: "open", output: "" }),
+  stripAnsi: vi.fn((s: string) => s),
+}));
+vi.mock("../plugin-state.js", () => ({
+  rememberCheckout: vi.fn(),
+  getCheckoutRecord: vi.fn(),
+  loadPluginState: vi.fn().mockReturnValue({ checkouts: {} }),
+  savePluginState: vi.fn(),
+}));
 
-import { apiGet, APIError, recordInstallation } from "../api-client.js";
+import { apiGet, apiPost } from "../api-client.js";
 import { loadAuthToken } from "../auth.js";
-import { downloadAndExtract } from "../installer.js";
+import { runAp } from "../cli-runner.js";
 import {
   handleSearchMarketplace,
   handleGetSkillDetails,
   handleInstallSkill,
   handleCheckPurchaseStatus,
+  handleGetCategories,
+  handleGetSellerProfile,
+  handleGetSkillReviews,
+  handleGetSecurityResults,
+  handleGetPlatforms,
+  handleLoginAccount,
+  handleLogoutAccount,
+  handleWhoamiAccount,
+  handleListPurchases,
+  handleStartCheckout,
 } from "../handlers.js";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +95,7 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     updated_at: null,
     archived_at: null,
     author_display_name: null,
+    author_slug: null,
     author_github: null,
     author_avatar_url: null,
     source_url: null,
@@ -68,6 +104,8 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     source_comments: null,
     source_versions_count: null,
     source_installs: null,
+    rating_average: null,
+    rating_count: 0,
     ap_security_status: null,
     ap_security_score: null,
     ap_scan_hash: null,
@@ -82,6 +120,8 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: unauthenticated
+  vi.mocked(loadAuthToken).mockReturnValue(null);
 });
 
 // ---------------------------------------------------------------------------
@@ -189,10 +229,7 @@ describe("handleGetSkillDetails", () => {
 
     await handleGetSkillDetails({ slug: "native-skill" });
 
-    const callParams = vi.mocked(apiGet).mock.calls[0][1] as Record<
-      string,
-      unknown
-    >;
+    const callParams = vi.mocked(apiGet).mock.calls[0][1] as Record<string, unknown>;
     expect(callParams).not.toHaveProperty("source");
   });
 });
@@ -202,107 +239,42 @@ describe("handleGetSkillDetails", () => {
 // ---------------------------------------------------------------------------
 
 describe("handleInstallSkill", () => {
-  it("blocks install when security_status is BLOCK", async () => {
-    vi.mocked(apiGet).mockResolvedValue(
-      makeDetail({ security_status: "block" }),
-    );
-
-    const result = await handleInstallSkill({ slug: "bad-skill" });
-
-    expect(result).toContain("blocked due to security issues");
-    expect(vi.mocked(downloadAndExtract)).not.toHaveBeenCalled();
-  });
-
-  it("blocks when ap_security_status is BLOCK (external skill)", async () => {
-    vi.mocked(apiGet).mockResolvedValue(
-      makeDetail({ security_status: null, ap_security_status: "BLOCK" }),
-    );
-
-    const result = await handleInstallSkill({ slug: "bad-ext-skill" });
-
-    expect(result).toContain("blocked due to security issues");
-    expect(vi.mocked(downloadAndExtract)).not.toHaveBeenCalled();
-  });
-
-  it("requires login for paid skills when no token is present", async () => {
-    vi.mocked(apiGet).mockResolvedValue(makeDetail({ price_cents: 500 }));
-    vi.mocked(loadAuthToken).mockReturnValue(null);
-
-    const result = await handleInstallSkill({ slug: "paid-skill" });
-
-    expect(result).toContain("ap login");
-    expect(result).toContain("$5.00");
-    expect(vi.mocked(downloadAndExtract)).not.toHaveBeenCalled();
-  });
-
-  it("calls download endpoint and downloadAndExtract on success", async () => {
-    vi.mocked(apiGet).mockImplementation(async (path: string) => {
-      if (path.includes("/download")) {
-        return { url: "https://dl.example.com/pkg.tar.gz", slug: "test" };
-      }
-      return makeDetail({ price_cents: 0 });
-    });
-    vi.mocked(downloadAndExtract).mockResolvedValue("/home/user/.claude/skills/test");
+  it("installs free skill via CLI", async () => {
+    vi.mocked(apiGet).mockResolvedValue(makeDetail({ price_cents: 0 }));
 
     const result = await handleInstallSkill({ slug: "test" });
 
-    expect(vi.mocked(apiGet)).toHaveBeenCalledWith(
-      "/v1/skills/test/download",
-      undefined,
-      null,
-    );
-    expect(vi.mocked(downloadAndExtract)).toHaveBeenCalledWith(
-      "https://dl.example.com/pkg.tar.gz",
-      "test",
-      "skill",
-      "agentpowers",
-      "1.0.0",
-      "pass",
-      "claude-code",
-    );
-    expect(result).toContain("Installed");
-    expect(result).toContain("/home/user/.claude/skills/test");
+    expect(result).toContain("Installed free skill test");
+    expect(vi.mocked(runAp)).toHaveBeenCalled();
   });
 
-  it("returns 'purchase first' message on 403 for a paid skill", async () => {
-    vi.mocked(apiGet).mockImplementation(async (path: string) => {
-      if (path.includes("/download")) {
-        throw new APIError("Forbidden", 403);
-      }
-      return makeDetail({ price_cents: 500 });
-    });
-    vi.mocked(loadAuthToken).mockReturnValue("token123");
-
-    const result = await handleInstallSkill({ slug: "paid-skill" });
-
-    expect(result).toContain("Purchase it first");
-    expect(result).toContain("$5.00");
+  it("returns missing slug message", async () => {
+    const result = await handleInstallSkill({ slug: "" });
+    expect(result).toContain("Missing required argument: slug");
   });
 
-  it("returns 'access denied' on 403 for a free skill", async () => {
-    vi.mocked(apiGet).mockImplementation(async (path: string) => {
-      if (path.includes("/download")) {
-        throw new APIError("Forbidden", 403);
-      }
-      return makeDetail({ price_cents: 0 });
-    });
-
-    const result = await handleInstallSkill({ slug: "free-skill" });
-
-    expect(result).toContain("access denied");
+  it("rejects invalid slugs", async () => {
+    const result = await handleInstallSkill({ slug: "../evil" });
+    expect(result).toContain("Invalid slug");
   });
 
-  it("re-throws non-403 API errors", async () => {
+  it("requires login for paid skills when no existing purchase", async () => {
     vi.mocked(apiGet).mockImplementation(async (path: string) => {
-      if (path.includes("/download")) {
-        throw new APIError("Server Error", 500);
-      }
-      return makeDetail({ price_cents: 0 });
+      if (path.includes("/detail/")) return makeDetail({ price_cents: 500 });
+      // /v1/auth/me called by ensureAuthenticated
+      if (path.includes("/auth/me")) throw new Error("Not authenticated");
+      return {};
     });
+    vi.mocked(loadAuthToken).mockReturnValue(null);
 
-    await expect(handleInstallSkill({ slug: "broken-skill" })).rejects.toThrow(
-      "Server Error",
-    );
+    await expect(handleInstallSkill({ slug: "paid-skill" })).rejects.toThrow("Not authenticated");
+  });
+
+  it("installs with explicit license code", async () => {
+    const result = await handleInstallSkill({ slug: "test", license_code: "LIC-123" });
+
+    expect(result).toContain("Installed test with provided license code");
+    expect(vi.mocked(runAp)).toHaveBeenCalled();
   });
 });
 
@@ -311,109 +283,231 @@ describe("handleInstallSkill", () => {
 // ---------------------------------------------------------------------------
 
 describe("handleCheckPurchaseStatus", () => {
-  it("returns 'not authenticated' message when no token", async () => {
+  it("throws when no token for purchase_id check", async () => {
     vi.mocked(loadAuthToken).mockReturnValue(null);
 
-    const result = await handleCheckPurchaseStatus({ purchase_id: "abc123" });
-
-    expect(result).toContain("Not authenticated");
-    expect(vi.mocked(apiGet)).not.toHaveBeenCalled();
+    await expect(
+      handleCheckPurchaseStatus({ purchase_id: "abc123" }),
+    ).rejects.toThrow("Not authenticated");
   });
 
   it("returns formatted purchase status", async () => {
     vi.mocked(loadAuthToken).mockReturnValue("token123");
-    vi.mocked(apiGet).mockResolvedValue({
-      purchase_id: "abc123",
-      skill_slug: "my-skill",
-      status: "completed",
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.includes("/auth/me")) return { email: "test@example.com" };
+      return {
+        purchase_id: "abc123",
+        skill_slug: "my-skill",
+        status: "completed",
+      };
     });
 
     const result = await handleCheckPurchaseStatus({ purchase_id: "abc123" });
 
-    expect(result).toContain("**Purchase:** abc123");
-    expect(result).toContain("**Skill:** my-skill");
-    expect(result).toContain("**Status:** completed");
-    expect(vi.mocked(apiGet)).toHaveBeenCalledWith(
-      "/v1/purchases/abc123/status",
-      undefined,
-      "token123",
-    );
+    expect(result).toContain("purchase_id: abc123");
+    expect(result).toContain("skill_slug: my-skill");
+    expect(result).toContain("status: completed");
   });
 
   it("includes license code in output when present", async () => {
     vi.mocked(loadAuthToken).mockReturnValue("token123");
-    vi.mocked(apiGet).mockResolvedValue({
-      purchase_id: "abc123",
-      skill_slug: "my-skill",
-      status: "completed",
-      license_code: "LIC-XYZ-9999",
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.includes("/auth/me")) return { email: "test@example.com" };
+      return {
+        purchase_id: "abc123",
+        skill_slug: "my-skill",
+        status: "completed",
+        license_code: "LIC-XYZ-9999",
+      };
     });
 
     const result = await handleCheckPurchaseStatus({ purchase_id: "abc123" });
 
-    expect(result).toContain("**License Code:** LIC-XYZ-9999");
+    expect(result).toContain("license_code: LIC-XYZ-9999");
   });
 });
 
 // ---------------------------------------------------------------------------
-// recordInstallation tracking in handleInstallSkill
+// New discovery tools
 // ---------------------------------------------------------------------------
 
-describe("handleInstallSkill — installation tracking", () => {
-  it("calls recordInstallation after successful install", async () => {
-    vi.mocked(loadAuthToken).mockReturnValue(null);
-    vi.mocked(apiGet).mockResolvedValue(makeDetail({ price_cents: 0 }));
-    vi.mocked(downloadAndExtract).mockResolvedValue("/home/.claude/skills/test");
+describe("handleGetCategories", () => {
+  it("returns formatted categories", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      categories: [
+        { category: "dev", name: "Development", count: 10, sample_keywords: "code, git" },
+      ],
+      total_count: 10,
+    });
 
-    await handleInstallSkill({ slug: "test" });
-
-    expect(vi.mocked(recordInstallation)).toHaveBeenCalledWith(
-      "test",
-      "mcp",
-      "agentpowers",
-      expect.any(String),
-      null,
-    );
+    const result = await handleGetCategories();
+    expect(result).toContain("Development");
+    expect(result).toContain("10 skills");
   });
 
-  it("calls recordInstallation with clawhub source for external skill", async () => {
-    vi.mocked(loadAuthToken).mockReturnValue(null);
-    vi.mocked(apiGet).mockResolvedValue(
-      makeDetail({ price_cents: 0, source: "clawhub" }),
-    );
-    vi.mocked(downloadAndExtract).mockResolvedValue("/home/.claude/skills/ext");
+  it("returns message when no categories", async () => {
+    vi.mocked(apiGet).mockResolvedValue({ categories: [], total_count: 0 });
+    const result = await handleGetCategories();
+    expect(result).toContain("No categories found");
+  });
+});
 
-    await handleInstallSkill({ slug: "ext-skill" });
+describe("handleGetSellerProfile", () => {
+  it("returns formatted seller profile", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      display_name: "Alice Dev",
+      bio: "Builder of things",
+      verified: true,
+      total_skills: 5,
+      total_downloads: 1000,
+      joined_at: "2025-01-01",
+      website_url: null,
+      github_url: "https://github.com/alice",
+      linkedin_url: null,
+      twitter_url: null,
+      skills: [{ slug: "cool-skill", title: "Cool Skill", price_cents: 0, download_count: 100 }],
+    });
 
-    expect(vi.mocked(recordInstallation)).toHaveBeenCalledWith(
-      "ext-skill",
-      "mcp",
-      "clawhub",
-      expect.any(String),
-      null,
-    );
+    const result = await handleGetSellerProfile({ seller_slug: "alice" });
+    expect(result).toContain("Alice Dev");
+    expect(result).toContain("Cool Skill");
+    expect(result).toContain("github.com/alice");
   });
 
-  it("does NOT call recordInstallation when skill is blocked", async () => {
+  it("returns error for missing seller_slug", async () => {
+    const result = await handleGetSellerProfile({});
+    expect(result).toContain("Missing required argument: seller_slug");
+  });
+});
+
+describe("handleGetSkillReviews", () => {
+  it("returns formatted reviews", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      items: [
+        { author_display_name: "Bob", rating: 5, text: "Great skill!" },
+      ],
+      total: 1,
+    });
+
+    const result = await handleGetSkillReviews({ skill_slug: "cool-skill" });
+    expect(result).toContain("Bob");
+    expect(result).toContain("5/5");
+    expect(result).toContain("Great skill!");
+  });
+});
+
+describe("handleGetSecurityResults", () => {
+  it("returns security scan info", async () => {
+    vi.mocked(apiGet).mockResolvedValue({
+      slug: "test-skill",
+      status: "pass",
+      score: 95,
+      trust_level: "verified",
+      findings: [],
+    });
+
+    const result = await handleGetSecurityResults({ skill_slug: "test-skill" });
+    expect(result).toContain("pass");
+    expect(result).toContain("95");
+    expect(result).toContain("No findings reported");
+  });
+});
+
+describe("handleGetPlatforms", () => {
+  it("lists all supported platforms", () => {
+    const result = handleGetPlatforms();
+    expect(result).toContain("Claude Code");
+    expect(result).toContain("Cursor");
+    expect(result).toContain("Codex");
+    expect(result).toContain("12 AI platforms");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Account tools
+// ---------------------------------------------------------------------------
+
+describe("handleLoginAccount", () => {
+  it("runs ap login and returns success", async () => {
+    const result = await handleLoginAccount({});
+    expect(result).toContain("Login completed");
+  });
+});
+
+describe("handleLogoutAccount", () => {
+  it("runs ap logout and returns success", async () => {
+    vi.mocked(runAp).mockResolvedValue({ code: 0, signal: null, stdout: "Logged out", stderr: "", timedOut: false, error: null });
+
+    const result = await handleLogoutAccount();
+    expect(result).toContain("Logged out successfully");
+  });
+});
+
+describe("handleWhoamiAccount", () => {
+  it("returns CLI and API identity", async () => {
+    vi.mocked(runAp).mockResolvedValue({ code: 0, signal: null, stdout: "user@example.com", stderr: "", timedOut: false, error: null });
+
+    const result = await handleWhoamiAccount();
+    expect(result).toContain("CLI whoami output");
+    expect(result).toContain("API /v1/auth/me output");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Purchase tools
+// ---------------------------------------------------------------------------
+
+describe("handleListPurchases", () => {
+  it("requires authentication", async () => {
     vi.mocked(loadAuthToken).mockReturnValue(null);
-    vi.mocked(apiGet).mockResolvedValue(
-      makeDetail({ security_status: "BLOCK" }),
-    );
-
-    await handleInstallSkill({ slug: "bad-skill" });
-
-    expect(vi.mocked(recordInstallation)).not.toHaveBeenCalled();
+    await expect(handleListPurchases({})).rejects.toThrow("Not authenticated");
   });
 
-  it("tracking failure does not reject the handler", async () => {
-    vi.mocked(loadAuthToken).mockReturnValue(null);
-    vi.mocked(apiGet).mockResolvedValue(makeDetail({ price_cents: 0 }));
-    vi.mocked(downloadAndExtract).mockResolvedValue("/home/.claude/skills/test");
-    vi.mocked(recordInstallation).mockRejectedValue(new Error("network down"));
+  it("returns formatted purchase list", async () => {
+    vi.mocked(loadAuthToken).mockReturnValue("token123");
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.includes("/auth/me")) return { email: "test@example.com" };
+      return {
+        items: [{
+          purchase_id: "p1",
+          skill_slug: "cool-skill",
+          skill_title: "Cool Skill",
+          status: "completed",
+          amount_cents: 500,
+          license_code: "LIC-1",
+          purchased_at: "2025-06-01",
+        }],
+      };
+    });
 
-    // Should resolve, not reject
-    await expect(handleInstallSkill({ slug: "test" })).resolves.toContain(
-      "Installed",
-    );
+    const result = await handleListPurchases({});
+    expect(result).toContain("Cool Skill");
+    expect(result).toContain("$5.00");
+    expect(result).toContain("LIC-1");
+  });
+});
+
+describe("handleStartCheckout", () => {
+  it("requires slug", async () => {
+    const result = await handleStartCheckout({});
+    expect(result).toContain("Missing required argument: slug");
+  });
+
+  it("creates checkout and returns info", async () => {
+    vi.mocked(loadAuthToken).mockReturnValue("token123");
+    vi.mocked(apiGet).mockImplementation(async (path: string) => {
+      if (path.includes("/auth/me")) return { email: "test@example.com" };
+      return {};
+    });
+    vi.mocked(apiPost).mockResolvedValue({
+      purchase_id: "p1",
+      checkout_url: "https://checkout.stripe.com/abc",
+      status: "pending",
+    });
+
+    const result = await handleStartCheckout({ slug: "paid-skill" });
+    expect(result).toContain("Checkout created");
+    expect(result).toContain("purchase_id: p1");
+    expect(result).toContain("checkout_url:");
   });
 });
