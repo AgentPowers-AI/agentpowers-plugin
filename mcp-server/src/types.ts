@@ -119,3 +119,160 @@ export interface InstalledSkillInfo {
   install_type: "skill" | "agent";
   is_edited: boolean;
 }
+
+// ---------- Categories ----------
+
+export interface CategoryItem {
+  category: string;
+  name: string;
+  count: number;
+  sample_keywords: string | null;
+}
+
+export interface CategoriesResponse {
+  categories: CategoryItem[];
+  total_count: number;
+}
+
+// ---------- Seller ----------
+
+export interface SellerSkill {
+  slug: string;
+  title: string;
+  price_cents: number;
+  download_count: number;
+}
+
+export interface SellerProfile {
+  display_name: string;
+  bio: string | null;
+  verified: boolean;
+  total_skills: number;
+  total_downloads: number;
+  joined_at: string | null;
+  website_url: string | null;
+  github_url: string | null;
+  linkedin_url: string | null;
+  twitter_url: string | null;
+  skills: SellerSkill[];
+}
+
+// ---------- Reviews ----------
+
+export interface ReviewItem {
+  author_display_name: string | null;
+  rating: number;
+  text: string | null;
+}
+
+export interface ReviewsResponse {
+  items: ReviewItem[];
+  total: number;
+}
+
+// ---------- Security ----------
+
+export interface SecurityFinding {
+  message?: string;
+  detail?: string;
+  title?: string;
+}
+
+export interface SecurityResults {
+  slug: string;
+  status: string;
+  score: number | null;
+  trust_level: string | null;
+  findings: (SecurityFinding | string)[];
+}
+
+// ---------- Marketplace Health ----------
+
+export interface HealthResponse {
+  status: string;
+  version: string;
+}
+
+export interface SkillsListResponse {
+  items: NativeSearchItem[];
+  total: number;
+}
+
+export interface SellersListResponse {
+  total: number;
+}
+
+// ---------- Account ----------
+
+export interface AuthMeResponse {
+  email?: string;
+  name?: string;
+}
+
+export interface AccountProfile {
+  email: string | null;
+  display_name: string | null;
+  display_name_slug: string | null;
+  github_username: string | null;
+  joined_at: string | null;
+  account_status: string | null;
+  deletion_scheduled_at: string | null;
+  bio: string | null;
+}
+
+// ---------- Purchases ----------
+
+export interface Purchase {
+  purchase_id: string;
+  skill_slug: string;
+  skill_title: string | null;
+  status: string;
+  amount_cents: number | null;
+  license_code: string | null;
+  purchased_at: string | null;
+}
+
+export interface PurchasesResponse {
+  items: Purchase[];
+}
+
+// ---------- Checkout ----------
+
+export interface CheckoutResponse {
+  purchase_id: string;
+  checkout_url: string;
+  status: string;
+}
+
+export interface DownloadPurchasedResponse {
+  url?: string;
+  download_url?: string;
+  slug: string;
+}
+
+// ---------- Checkout State ----------
+
+export interface CheckoutRecord {
+  purchase_id: string;
+  slug: string;
+  checkout_url: string;
+  status: string;
+  license_code?: string | null;
+  purchased_at?: string | null;
+  success_url?: string;
+  cancel_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PluginState {
+  checkouts: Record<string, CheckoutRecord>;
+}
+
+// ---------- Platform ----------
+
+export interface PlatformInfo {
+  slug: string;
+  name: string;
+  tagline: string;
+}

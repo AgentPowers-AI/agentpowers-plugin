@@ -10,6 +10,22 @@ function getBaseUrl(): string {
   );
 }
 
+/** Normalize to ensure the base always has /v1 suffix. */
+function normalizeApiBase(raw: string): string {
+  const base = raw.replace(/\/+$/, "");
+  return base.endsWith("/v1") ? base : `${base}/v1`;
+}
+
+/** The full /v1 API base URL. */
+export const API_BASE = normalizeApiBase(
+  process.env.AGENTPOWERS_API_BASE ??
+  process.env.PUBLIC_API_URL ??
+  `${getBaseUrl()}/v1`,
+);
+
+/** The root API URL without /v1 (for health endpoint, etc). */
+export const API_ROOT = API_BASE.replace(/\/v1$/, "");
+
 export class APIError extends Error {
   constructor(
     message: string,
@@ -181,6 +197,48 @@ export async function apiPost<T = unknown>(
     const text = await response.text();
     const { message, code } = parseErrorBody(text);
     throw new APIError(message, response.status, code);
+  }
+
+  return (await response.json()) as T;
+}
+
+/**
+ * GET request against the root API (without /v1 prefix).
+ * Used for health endpoint, etc.
+ */
+export async function apiRoot<T = unknown>(
+  path: string,
+  auth?: string | null,
+): Promise<T> {
+  const url = `${API_ROOT}${path.startsWith("/") ? path : `/${path}`}`;
+
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (auth) {
+    headers["Authorization"] = `Bearer ${auth}`;
+  }
+
+  const response = await safeFetch(url, { headers });
+
+  if (!response.ok) {
+    const body = await response.text();
+    const { message, code } = parseErrorBody(body);
+    throw new APIError(message, response.status, code);
+  }
+
+  return (await response.json()) as T;
+}
+
+/**
+ * Fetch JSON from an arbitrary URL (for OpenAPI spec, npm registry, etc).
+ */
+export async function fetchUrl<T = unknown>(url: string): Promise<T> {
+  const response = await safeFetch(url, {
+    headers: { Accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new APIError(body, response.status);
   }
 
   return (await response.json()) as T;
