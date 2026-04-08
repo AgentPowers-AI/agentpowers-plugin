@@ -77,7 +77,7 @@ function asArray<T>(value: unknown): T[] {
 async function ensureAuthenticated(): Promise<void> {
   const token = loadAuthToken();
   if (!token) {
-    throw new Error("Not authenticated. Run login_account (or `ap login`) first.");
+    throw new Error("Not authenticated. Run login_account (or `npx @agentpowers/cli login`) first.");
   }
   try {
     await apiGet<AuthMeResponse>("/v1/auth/me", undefined, token);
@@ -363,12 +363,19 @@ function compareSemver(installed: string, latest: string): number | null {
 // Purchase polling
 // ---------------------------------------------------------------------------
 
+/** Purchase IDs must be hex/hyphens, 8-64 chars (UUIDs, Stripe IDs, etc.). */
+const PURCHASE_ID_RE = /^[a-f0-9-]{8,64}$/i;
+
 async function pollPurchaseStatus(args: Record<string, unknown>): Promise<PurchaseStatus & { purchased_at?: string }> {
-  const purchaseId = String(args.purchase_id || "").trim();
+  const purchaseId = args.purchase_id != null ? String(args.purchase_id).trim() : "";
   const sessionId = String(args.session_id || "").trim();
 
   if (!purchaseId && !sessionId) {
     throw new Error("Provide purchase_id or session_id.");
+  }
+
+  if (purchaseId && !PURCHASE_ID_RE.test(purchaseId)) {
+    throw new Error(`Invalid purchase ID "${purchaseId}".`);
   }
 
   if (!sessionId) {
@@ -389,7 +396,7 @@ async function pollPurchaseStatus(args: Record<string, unknown>): Promise<Purcha
       );
     }
     return apiGet<PurchaseStatus & { purchased_at?: string }>(
-      `/v1/purchases/${purchaseId}/status`,
+      `/v1/purchases/${encodeURIComponent(purchaseId)}/status`,
       undefined,
       auth,
     );
@@ -784,7 +791,7 @@ export async function handleCheckForUpdates(
     for (const item of outdated) {
       const edited = item.edited === null ? "unknown" : item.edited ? "yes" : "no";
       lines.push(`- ${item.slug} (${item.source}) installed=${item.installed} latest=${item.latest} edited=${edited}`);
-      lines.push(`  Suggested: ap update ${item.slug}`);
+      lines.push(`  Suggested: npx @agentpowers/cli update ${item.slug}`);
     }
     lines.push("");
   }

@@ -1,6 +1,6 @@
 {
   "name": "@agentpowers/mcp-server",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "AgentPowers marketplace MCP server for Claude Code — search, browse, and install skills from the marketplace directly in your conversation.",
   "type": "module",
   "main": "dist/index.js",

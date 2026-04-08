@@ -26,9 +26,7 @@ import {
   handleUninstallSkill,
   handleCheckForUpdates,
   // New discovery tools
-  handleGetCategories,
   handleGetSellerProfile,
-  handleGetSkillReviews,
   handleGetSecurityResults,
   handleGetMarketplaceSnapshot,
   handleGetPlatforms,
@@ -37,16 +35,20 @@ import {
   handleLoginAccount,
   handleLogoutAccount,
   handleWhoamiAccount,
-  handleGetAccountProfile,
   // Purchase tools
-  handleListPurchases,
-  handleStartCheckout,
   handleConfirmPurchaseSession,
   handleDownloadPurchasedSkill,
   handleInstallPurchasedSkill,
   // Self-update
   handleCheckPluginVersion,
 } from "./handlers.js";
+import {
+  handleGetCategories,
+  handleGetSkillReviews,
+  handleStartCheckout,
+  handleGetAccountProfile,
+  handleListPurchases,
+} from "./handlers-commerce.js";
 
 // Re-export formatters for tests (backward compat)
 export {
@@ -117,8 +119,12 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_categories",
-    description: "List marketplace categories and counts.",
-    inputSchema: { type: "object" as const, properties: {} },
+    description:
+      "List all skill categories in the AgentPowers marketplace with skill counts. Useful for browsing and filtering.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
   },
   {
     name: "get_seller_profile",
@@ -133,14 +139,17 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_skill_reviews",
-    description: "Get reviews for a skill slug.",
+    description:
+      "Get user reviews for a skill or agent. Returns ratings, review text, and authors.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        skill_slug: { type: "string", description: "The skill slug to get reviews for" },
-        limit: { type: "number", description: "Maximum reviews to return (default: 10)" },
+        slug: {
+          type: "string",
+          description: "The unique slug identifier for the skill or agent",
+        },
       },
-      required: ["skill_slug"],
+      required: ["slug"],
     },
   },
   {
@@ -193,32 +202,40 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_account_profile",
-    description: "Fetch authenticated account profile from AgentPowers.",
-    inputSchema: { type: "object" as const, properties: {} },
+    description:
+      "Get your AgentPowers account profile. Requires authentication via `npx @agentpowers/cli login`.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
   },
 
   // --- Purchases ---
   {
     name: "list_purchases",
-    description: "List your purchases, licenses, and install commands.",
+    description:
+      "List your purchased skills with license codes and status. Requires authentication.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        status: { type: "string", description: "Optional status filter (completed/pending/failed/refunded)" },
-        limit: { type: "number", description: "Maximum records (default 100)" },
+        max_results: {
+          type: "number",
+          description: "Maximum number of results (default: 20)",
+        },
       },
     },
   },
   {
     name: "start_checkout",
-    description: "Create checkout session for a paid skill and open payment page.",
+    description:
+      "Start a purchase for a paid skill. Returns a checkout URL to complete payment in the browser. Free skills do not need checkout — use install_skill directly.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        slug: { type: "string", description: "Skill slug to purchase" },
-        auto_open_browser: { type: "boolean", description: "Open checkout URL in browser (default true)" },
-        success_url: { type: "string" },
-        cancel_url: { type: "string" },
+        slug: {
+          type: "string",
+          description: "The slug of the skill to purchase",
+        },
       },
       required: ["slug"],
     },

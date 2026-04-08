@@ -287,7 +287,7 @@ describe("handleCheckPurchaseStatus", () => {
     vi.mocked(loadAuthToken).mockReturnValue(null);
 
     await expect(
-      handleCheckPurchaseStatus({ purchase_id: "abc123" }),
+      handleCheckPurchaseStatus({ purchase_id: "abc12345" }),
     ).rejects.toThrow("Not authenticated");
   });
 
@@ -296,15 +296,15 @@ describe("handleCheckPurchaseStatus", () => {
     vi.mocked(apiGet).mockImplementation(async (path: string) => {
       if (path.includes("/auth/me")) return { email: "test@example.com" };
       return {
-        purchase_id: "abc123",
+        purchase_id: "abc12345",
         skill_slug: "my-skill",
         status: "completed",
       };
     });
 
-    const result = await handleCheckPurchaseStatus({ purchase_id: "abc123" });
+    const result = await handleCheckPurchaseStatus({ purchase_id: "abc12345" });
 
-    expect(result).toContain("purchase_id: abc123");
+    expect(result).toContain("purchase_id: abc12345");
     expect(result).toContain("skill_slug: my-skill");
     expect(result).toContain("status: completed");
   });
@@ -314,14 +314,14 @@ describe("handleCheckPurchaseStatus", () => {
     vi.mocked(apiGet).mockImplementation(async (path: string) => {
       if (path.includes("/auth/me")) return { email: "test@example.com" };
       return {
-        purchase_id: "abc123",
+        purchase_id: "abc12345",
         skill_slug: "my-skill",
         status: "completed",
         license_code: "LIC-XYZ-9999",
       };
     });
 
-    const result = await handleCheckPurchaseStatus({ purchase_id: "abc123" });
+    const result = await handleCheckPurchaseStatus({ purchase_id: "abc12345" });
 
     expect(result).toContain("license_code: LIC-XYZ-9999");
   });

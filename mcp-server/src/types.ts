@@ -276,3 +276,60 @@ export interface PlatformInfo {
   name: string;
   tagline: string;
 }
+
+// ---------- Commerce types (used by handlers-commerce.ts) ----------
+
+/** Category item as returned by the unified /v1/categories endpoint. */
+export interface CommerceCategoryItem {
+  slug: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  skill_count: number;
+}
+
+/** Response from /v1/categories (commerce handler format). */
+export interface CommerceCategoriesResponse {
+  categories: CommerceCategoryItem[];
+}
+
+/** Review item (commerce handler format). */
+export interface CommerceReviewItem {
+  rating: number;
+  text: string | null;
+  created_at: string;
+  author: string;
+}
+
+/** Response from /v1/skills/:slug/reviews (commerce handler format). */
+export interface ReviewListResponse {
+  reviews: CommerceReviewItem[];
+  total: number;
+  average_rating: number | null;
+}
+
+/** User profile (commerce handler format). */
+export interface UserProfile {
+  display_name: string | null;
+  display_name_slug: string | null;
+  email: string | null;
+  github_username: string | null;
+  bio: string | null;
+  created_at: string | null;
+}
+
+/** Purchase item (commerce handler format). */
+export interface PurchaseItem {
+  slug: string;
+  title: string;
+  amount_cents: number;
+  status: string;
+  purchased_at: string;
+  license_code: string | null;
+}
+
+/** Response from /v1/purchases (commerce handler format). */
+export interface PurchaseListResponse {
+  purchases: PurchaseItem[];
+  total: number;
+}
