@@ -1,0 +1,53 @@
+{
+  "name": "@agentpowers/mcp-server",
+  "version": "0.2.3",
+  "description": "AgentPowers marketplace MCP server for Claude Code — search, browse, and install skills from the marketplace directly in your conversation.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "agentpowers-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "claude-code",
+    "agentpowers",
+    "marketplace",
+    "skills",
+    "agents",
+    "model-context-protocol"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AgentPowers-AI/agentpowers-plugin.git",
+    "directory": "mcp-server"
+  },
+  "homepage": "https://agentpowers.ai",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@agentpowers/core": "^0.1.2",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

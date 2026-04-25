@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agentpowers": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/index.js"],
+      "env": {
+        "AGENTPOWERS_API_URL": "https://api.agentpowers.ai"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "agentpowers",
+  "version": "1.1.0",
+  "description": "AgentPowers marketplace \u2014 discover, install, and manage premium Claude skills and agents directly in conversation",
+  "author": {
+    "name": "AgentPowers",
+    "url": "https://agentpowers.ai"
+  },
+  "homepage": "https://agentpowers.ai",
+  "repository": "https://github.com/AgentPowers-AI/agentpowers-plugin",
+  "license": "MIT",
+  "keywords": [
+    "marketplace",
+    "skills",
+    "agents",
+    "premium",
+    "claude-code"
+  ]
+}
